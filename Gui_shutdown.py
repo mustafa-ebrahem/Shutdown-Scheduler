@@ -3,6 +3,34 @@ from tkinter import messagebox
 from datetime import datetime, timedelta
 import json
 import os
+import threading
+
+class AutoCloseMessageBox(tk.Toplevel):
+    def __init__(self, parent, title, message, timeout=60):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("300x150")
+        self.configure(bg="#2b2b2b")
+        self.label = tk.Label(self, text=message, bg="#2b2b2b", fg="white", wraplength=280)
+        self.label.pack(pady=20)
+        self.timeout = timeout
+        self.attributes('-topmost', True)
+        
+        # Center the window on the screen
+        self.update_idletasks()
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        window_width = self.winfo_width()
+        window_height = self.winfo_height()
+        position_right = int(screen_width / 2 - window_width / 2)
+        position_down = int(screen_height / 2 - window_height / 2)
+        self.geometry(f"{window_width}x{window_height}+{position_right}+{position_down}")
+
+        self.after_id = self.after(self.timeout * 1000, self.destroy)
+
+    def close(self):
+        self.after_cancel(self.after_id)
+        self.destroy()
 
 class ShutdownScheduler:
     def __init__(self, root):
@@ -22,10 +50,17 @@ class ShutdownScheduler:
         
         self.shutdown_schedules = []
         self.timer_updates = []
+
+        self.ten_min_warning_shown = False
+        self.five_min_warning_shown = False
         
         self.load_schedules()  # Load schedules from file when app starts
         self.remove_outdated_schedules()
-        
+
+        # Create a label to show reminders
+        self.reminder_label = tk.Label(self.root, text="", width=40, bg="#2b2b2b", fg="yellow")
+        self.reminder_label.pack(pady=10)
+
     def load_schedules(self):
         try:
             with open("shutdown_schedules.json", "r") as file:
@@ -35,6 +70,7 @@ class ShutdownScheduler:
             pass
         except json.JSONDecodeError:
             pass
+        
     def remove_outdated_schedules(self):
         now = datetime.now()
         outdated_indexes = []
@@ -95,6 +131,10 @@ class ShutdownScheduler:
             self.hour_var.set("")  # Reset the dropdown selection
             self.minute_var.set("")  # Reset the dropdown selection
             
+            # Reset warning flags
+            self.ten_min_warning_shown = False
+            self.five_min_warning_shown = False
+            
         except ValueError:
             messagebox.showerror("Error", "Invalid hour or minute")
         
@@ -128,10 +168,12 @@ class ShutdownScheduler:
         now = datetime.now()
         time_remaining = shutdown_time - now
 
-        if abs(time_remaining.total_seconds() - 600) < 0.1:
-            messagebox.showinfo("Reminder", "10 minutes remaining until shutdown")
-        elif abs(time_remaining.total_seconds() - 300) < 0.1:
-            messagebox.showwarning("Warning", "5 minutes remaining until shutdown")
+        if abs(time_remaining.total_seconds() - 600) < 1 and not self.ten_min_warning_shown:
+            self.show_auto_close_message("Reminder", "10 minutes remaining until shutdown", 60)
+            self.ten_min_warning_shown = True
+        elif abs(time_remaining.total_seconds() - 300) < 1 and not self.five_min_warning_shown:
+            self.show_auto_close_message("Warning", "5 minutes remaining until shutdown", 60)
+            self.five_min_warning_shown = True
         elif abs(time_remaining.total_seconds() - 1) < 1:
             os.system("shutdown -s -t 0")
 
@@ -142,7 +184,15 @@ class ShutdownScheduler:
             label.config(text=f"Shutdown at {shutdown_time.strftime('%H:%M')} | Time Remaining: {time_remaining_str}")
 
         self.timer_updates[idx] = self.root.after(1000, lambda: self.update_timer(idx, shutdown_time))
+        
+    def show_auto_close_message(self, title, message, timeout):
+        messagebox_thread = threading.Thread(target=self._show_message_in_thread, args=(title, message, timeout))
+        messagebox_thread.start()
 
+    def _show_message_in_thread(self, title, message, timeout):
+        dialog = AutoCloseMessageBox(self.root, title, message, timeout)
+        dialog.grab_set()
+        self.root.wait_window(dialog)
         
     def cancel_shutdown(self, index):
         self.root.after_cancel(self.timer_updates[index])
